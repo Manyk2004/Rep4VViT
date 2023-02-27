@@ -1,0 +1,19 @@
+#создание базы данных
+CREATE DATABASE mtuci_db
+
+#создание таблицы
+CREATE TABLE student_group (id SERIAL PRIMARY KEY, numb varchar NOT NULL, chair varchar NOT NULL)
+
+#добавление элементов в таблицу
+INSERT INTO student_group (numb, chair) VALUES ('БВТ2001', 'МКиИТ')
+
+#вывод данных из таблицы
+SELECT * FROM student_group
+
+#удаление ненужной записи
+DELETE FROM student_group WHERE numb='БВТ2001'
+
+#связывание таблиц
+CREATE TABLE student (id SERIAL PRIMARY KEY, full_name varchar NOT NULL, passport varchar(10) NOT NULL, group_numb varchar REFERENCES student_group(numb))
+
+#далее идёт дз
