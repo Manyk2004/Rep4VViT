@@ -1,5 +1,5 @@
 import requests
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, redirect
 import psycopg2
 
 app = Flask(__name__)
@@ -11,25 +11,44 @@ conn = psycopg2.connect(database="service_db1",
 cursor = conn.cursor()
 
 
-@app.route('/login/', methods=['GET'])
-def index():
+@app.route('/login/', methods=['POST', 'GET'])
+def login():
+    if request.method == 'POST':
+        if request.form.get("login"):
+            username = request.form.get('username')
+            password = request.form.get('password')
+            cursor.execute("SELECT * FROM service.users WHERE login=%s AND password=%s", (str(username), str(password)))
+            records = list(cursor.fetchall())
+
+            return render_template('account.html', full_name=records[0][1])
+        elif request.form.get("registration"):
+            return redirect("/registration/")
+
     return render_template('login.html')
 
+@app.route('/registration/', methods=['POST', 'GET'])
+def registration():
+    if request.method == 'POST':
+        name = request.form.get('name')
+        login = request.form.get('login')
+        password = request.form.get('password')
 
-@app.route('/login/', methods=['POST'])
-def login():
-    username = request.form.get('username')
-    password = request.form.get('password')
+        if (not name):
+            return render_template('login2.html', error="the name was not entered")
+        elif not name.replace(" ", "").isalpha():
+            return render_template('login2.html', error="the name cannot contain numbers")
+        elif (not login) or (not password):
+            return render_template('login2.html', error="login and/or password was not entered")
+        if login:
+            cursor.execute('SELECT * FROM service.users')
+            rows = cursor.fetchall()
+            for row in rows:
+                if login == row[2]:
+                    return render_template('login3.html', error="user with same login already exists")
+            cursor.execute('INSERT INTO service.users (full_name, login, password) VALUES (%s, %s, %s);',
+                        (str(name), str(login), str(password)))
+            conn.commit()
 
-    if not username:
-        return render_template('login.html', error="You must enter username.")
+        return redirect('/login/')
 
-    if not password:
-        return render_template('login.html', error="You must enter password")
-
-    cursor.execute("SELECT * FROM service.users WHERE login=%s AND password=%s", (str(username), str(password)))
-    records = cursor.fetchall()
-
-    if records:
-        return render_template('account.html', full_name=records[0][1], login=records[0][2], password=records[0][3])
-    return render_template('login.html', error="This user does not exist.")
+    return render_template('registration.html')
