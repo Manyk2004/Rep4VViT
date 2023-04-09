@@ -1,239 +1,530 @@
-import telebot
-from telebot import types
-from datetime import date
 import psycopg2
-
-token = "6212441460:AAGRSm2tcmW48SCgrCoV31lv-IkPa9lkM90"
-bot = telebot.TeleBot(token)
-
-conn = psycopg2.connect(database="timetable",
-                        user="postgres",
-                        password="FirEfirE",
-                        host="localhost",
-                        port="5432")
-cursor = conn.cursor()
+import sys
+from datetime import date
+from PyQt5.QtWidgets import (QApplication, QWidget, QTabWidget, QAbstractScrollArea, QVBoxLayout, QHBoxLayout,
+                             QTableWidget, QGroupBox, QTableWidgetItem, QPushButton, QMessageBox, QInputDialog)
 
 today = date.today()
 num = int(today.isocalendar().week)
 if (num % 2) == 0:
-    this_week = "timetable_lower"
+   this_week = "timetable_lower"
 else:
-    this_week = "timetable_upper"
+   this_week = "timetable_upper"
 
 
-@bot.message_handler(commands=['start'])
-def start(message):
-    keyboard = types.ReplyKeyboardMarkup()
-    keyboard.row("/mtuci", "/help", "/timetable", "/week")
-    bot.send_message(message.chat.id, 'Здравствуйте! Что вы хотите узнать?\n Команда /help для справки',
-                     reply_markup=keyboard)
+class MainWindow(QWidget):
+    def __init__(self):
+        super(MainWindow, self).__init__()
+
+        self._connect_to_db()
+
+        self.setWindowTitle("БВТ2201")
+
+        self.vbox = QVBoxLayout(self)
+
+        self.tabs = QTabWidget(self)
+        self.vbox.addWidget(self.tabs)
+
+        self._create_shedule_tab()
+        self._create_teacher_tab()
+        self._create_timetable_upper_tab()
+        self._create_timetable_lower_tab()
+
+        self.rowSelected = None
+        self.idSelected = None
+
+    def _connect_to_db(self):
+        self.conn = psycopg2.connect(database="itlab8",
+                                     user="postgres",
+                                     password="FirEfirE",
+                                     host="localhost",
+                                     port="5432")
+
+        self.cursor = self.conn.cursor()
+
+    def _create_teacher_tab(self):
+        self.teacher_tab = QWidget()
+        self.tabs.addTab(self.teacher_tab, "Преподаватели")
+
+        self.teacher_gbox = QGroupBox("Преподаватели")
+
+        self.svbox = QVBoxLayout()
+        self.shbox1 = QHBoxLayout()
+        self.shbox2 = QHBoxLayout()
+
+        self.svbox.addLayout(self.shbox1)
+        self.svbox.addLayout(self.shbox2)
+
+        self.shbox1.addWidget(self.teacher_gbox)
+
+        self._create_teacher_table()
+
+        self.update_teacher_button = QPushButton("Обновить")
+        self.shbox2.addWidget(self.update_teacher_button)
+        self.update_teacher_button.clicked.connect(self._update_teacher)
+
+        self.shboxa = QHBoxLayout()
+        self.shbox1.addLayout(self.shboxa)
+        self.alter_teacher_button = QPushButton("Изменить")
+        self.shboxa.addWidget(self.alter_teacher_button)
+        self.alter_teacher_button.clicked.connect(lambda ch: self.update_teacher_info('Изменить'))
+
+        self.shboxd = QHBoxLayout()
+        self.shbox1.addLayout(self.shboxd)
+        self.delete_teacher_button = QPushButton("Удалить")
+        self.shboxd.addWidget(self.delete_teacher_button)
+        self.delete_teacher_button.clicked.connect(lambda ch: self.update_teacher_info('Удалить'))
+
+        self.shboxrow = QHBoxLayout()
+        self.shbox1.addLayout(self.shboxrow)
+        self.add_teacher_button = QPushButton("Добавить строку")
+        self.shboxrow.addWidget(self.add_teacher_button)
+        self.add_teacher_button.clicked.connect(lambda ch: self.update_teacher_info('Добавить строку'))
+
+        self.teacher_tab.setLayout(self.svbox)
+
+    def _create_teacher_table(self):
+        self.teacher_table = QTableWidget()
+        self.teacher_table.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
+
+        self.teacher_table.setColumnCount(3)
+        self.teacher_table.setHorizontalHeaderLabels(["ФИО", "Предмет", ""])
+
+        self._update_teacher_table()
+
+        self.mvbox = QVBoxLayout()
+        self.mvbox.addWidget(self.teacher_table)
+        self.teacher_gbox.setLayout(self.mvbox)
+
+    def _update_teacher_table(self):
+        self.cursor.execute("SELECT * FROM teacher")
+        records = list(self.cursor.fetchall())
+
+        self.teacher_table.setRowCount(len(records) + 1)
+
+        for i, r in enumerate(records):
+            r = list(r)
+            updateTeach = QPushButton("Выбрать")
+
+            self.teacher_table.setItem(i, 0, QTableWidgetItem(str(r[1])))
+            self.teacher_table.setItem(i, 1, QTableWidgetItem(str(r[2])))
+
+            self.teacher_table.setItem(len(records), 0, QTableWidgetItem(str('')))
+            self.teacher_table.setItem(len(records), 1, QTableWidgetItem(str('')))
+
+            self.teacher_table.setCellWidget(i, 2, updateTeach)
+            updateTeach.clicked.connect(lambda ch, num=i, id=r[0]: self.select_row(num, id))
+
+        selectTeach = QPushButton("Выбрать")
+        self.teacher_table.setCellWidget(len(records), 2, selectTeach)
+        selectTeach.clicked.connect(lambda ch, num=len(records): self.select_row(num))
+
+        self.teacher_table.resizeRowsToContents()
+
+    def update_teacher_info(self, query):
+        if query == 'Изменить':
+            self.cursor.execute("select count(full_name) from teacher")
+            records = self.cursor.fetchall()
+            try:
+                if records[0][0] == self.rowSelected:
+                    raise Exception
+                elif records[0][0] > self.rowSelected:
+                    self.cursor.execute("SELECT column_name FROM information_schema.columns "
+                                        "WHERE table_schema = 'public' AND table_name = 'teacher' ")
+                    columns = self.cursor.fetchall()
+                    new_values = []
+                    for temp in columns[1:]:
+                        text, ok = QInputDialog.getText(self, 'Добавить нового преподавателя', 'Enter {} value:'.format(temp[0]))
+                        if ok and text != "":
+                            new_values.append(text)
+                    if len(new_values) == 2:
+                        try:
+                            self.cursor.execute("update teacher "
+                                                "set full_name = %s, subject = %s "
+                                                "where id = {};".format(self.idSelected), tuple(new_values))
+                            self.conn.commit()
+                        except:
+                            self.conn.commit()
+                            QMessageBox.about(self, "Ошибка", "Данного предмета нет в таблице ")
+
+            except:
+                self.conn.commit()
+                QMessageBox.about(self, "Ошибка", "Выберите пустую строку")
+
+        elif query == 'Удалить':
+            self.cursor.execute("select count(full_name) from teacher")
+            records = self.cursor.fetchall()
+            try:
+                if records[0][0] == self.rowSelected:
+                    raise Exception
+                elif records[0][0] > self.rowSelected:
+                    print(self.rowSelected)
+                    self.cursor.execute("delete from teacher where id={}".format(self.idSelected))
+                    self.conn.commit()
+            except:
+                self.conn.commit()
+                QMessageBox.about(self, "Ошибка", "Выберите пустую строку")
+
+        elif query == 'Добавить строку':
+            self.cursor.execute("select count(full_name) from teacher")
+            records = self.cursor.fetchall()
+            if records[0][0] == self.rowSelected:
+                print('Можно')
+                self.cursor.execute("SELECT column_name FROM information_schema.columns "
+                                    "WHERE table_schema = 'public' AND table_name = 'teacher' ")
+                columns = self.cursor.fetchall()
+                new_values = []
+                for temp in columns[1:]:
+                    text, ok = QInputDialog.getText(self, 'Добавление нового преподавателя', 'Enter {} value:'.format(temp[0]))
+                    if ok and text != "":
+                        new_values.append(text)
+                if len(new_values) == 2:
+                    try:
+                        self.cursor.execute("insert into "
+                                            "teacher(full_name, subject) "
+                                            "values(%s, %s);", tuple(new_values))
+                        self.conn.commit()
+                    except:
+                        self.conn.commit()
+                        QMessageBox.about(self, "Ошибка", "Данного предмета нет в таблице ")
+
+                print(new_values)
+
+            else:
+                QMessageBox.about(self, "Ошибка", "Выберите пустую строку")
+
+    def _update_teacher(self):
+        self.rowSelected = None
+        self.idSelected = None
+        self._update_teacher_table()
+
+    def _create_timetable_upper_tab(self):
+        self.timetable_upper_tab = QWidget()
+        self.tabs.addTab(self.timetable_upper_tab, "Верхняя")
+
+        self.timetable_upper_gbox = QGroupBox("Верхняя")
+
+        self.svbox = QVBoxLayout()
+        self.shbox1 = QHBoxLayout()
+        self.shbox2 = QHBoxLayout()
+
+        self.svbox.addLayout(self.shbox1)
+        self.svbox.addLayout(self.shbox2)
+
+        self.shbox1.addWidget(self.timetable_upper_gbox)
+
+        self._create_timetable_upper_table()
+
+        self.update_timetable_upper_button = QPushButton("Обновить")
+        self.shbox2.addWidget(self.update_timetable_upper_button)
+        self.update_timetable_upper_button.clicked.connect(self._update_timetable_upper)
+
+        self.timetable_upper_tab.setLayout(self.svbox)
+
+    def _create_timetable_upper_table(self):
+        self.timetable_upper_table = QTableWidget()
+        self.timetable_upper_table.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
+
+        self.timetable_upper_table.setColumnCount(2)
+        self.timetable_upper_table.setHorizontalHeaderLabels(["День", "Предметы", ""])
+
+        self._update_timetable_upper_table()
+
+        self.mvbox = QVBoxLayout()
+        self.mvbox.addWidget(self.timetable_upper_table)
+        self.timetable_upper_gbox.setLayout(self.mvbox)
+
+    def _update_timetable_upper_table(self):
+        self.cursor.execute(
+            "select day, string_agg(table_column, '\n\n') as table_row from (select day, timetable_upper.subject "
+            "||' | '|| room_numb ||' | '|| start_time ||' | '|| full_name as table_column from timetable_upper, "
+            "teacher where teacher.subject = timetable_upper.subject order by start_time)timetable_upper group by 1 "
+            "order by case when day = 'Понедельник' then 1 when day = 'Вторник' then 2 when day = 'Среда' then 3 when "
+            "day = 'Четверг' then 4 else 5 end;")
+        records = list(self.cursor.fetchall())
+
+        self.timetable_upper_table.setRowCount(len(records))
+
+        for i, r in enumerate(records):
+            r = list(r)
+
+            self.timetable_upper_table.setItem(i, 0,
+                                               QTableWidgetItem(str(r[0])))
+            self.timetable_upper_table.setItem(i, 1,
+                                               QTableWidgetItem(str(r[1])))
+
+        self.timetable_upper_table.resizeRowsToContents()
+
+    def _update_timetable_upper(self):
+        self.rowSelected = None
+        self.idSelected = None
+        self._update_timetable_upper_table()
+
+    def _create_timetable_lower_tab(self):
+        self.timetable_lower_tab = QWidget()
+        self.tabs.addTab(self.timetable_lower_tab, "Нижняя")
+
+        self.timetable_lower_gbox = QGroupBox("Нижняя")
+
+        self.svbox = QVBoxLayout()
+        self.shbox1 = QHBoxLayout()
+        self.shbox2 = QHBoxLayout()
+
+        self.svbox.addLayout(self.shbox1)
+        self.svbox.addLayout(self.shbox2)
+
+        self.shbox1.addWidget(self.timetable_lower_gbox)
+
+        self._create_timetable_lower_table()
+
+        self.update_timetable_lower_button = QPushButton("Обновить")
+        self.shbox2.addWidget(self.update_timetable_lower_button)
+        self.update_timetable_lower_button.clicked.connect(self._update_timetable_lower)
+
+        self.timetable_lower_tab.setLayout(self.svbox)
+
+    def _create_timetable_lower_table(self):
+        self.timetable_lower_table = QTableWidget()
+        self.timetable_lower_table.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
+
+        self.timetable_lower_table.setColumnCount(2)
+        self.timetable_lower_table.setHorizontalHeaderLabels(["День", "Предметы", ""])
+
+        self._update_timetable_lower_table()
+
+        self.mvbox = QVBoxLayout()
+        self.mvbox.addWidget(self.timetable_lower_table)
+        self.timetable_lower_gbox.setLayout(self.mvbox)
+
+    def _update_timetable_lower_table(self):
+        self.cursor.execute(
+            "select day, string_agg(table_column, '\n\n') as table_row from (select day, timetable_lower.subject "
+            "||' | '|| room_numb ||' | '|| start_time ||' | '|| full_name as table_column from timetable_lower, "
+            "teacher where teacher.subject = timetable_lower.subject order by start_time)timetable_lower group by 1 "
+            "order by case when day = 'Понедельник' then 1 when day = 'Вторник' then 2 when day = 'Среда' then 3 when "
+            "day = 'Четверг' then 4 else 5 end;")
+        records = list(self.cursor.fetchall())
+
+        self.timetable_lower_table.setRowCount(len(records))
+
+        for i, r in enumerate(records):
+            r = list(r)
+
+            self.timetable_lower_table.setItem(i, 0, QTableWidgetItem(str(r[0])))
+            self.timetable_lower_table.setItem(i, 1, QTableWidgetItem(str(r[1])))
+
+        self.timetable_lower_table.resizeRowsToContents()
+
+    def _update_timetable_lower(self):
+        self.rowSelected = None
+        self.idSelected = None
+        self._update_timetable_lower_table()
+
+    def _create_shedule_tab(self):
+        self.day = 'Понедельник'
+        self.schedule_tab = QWidget()
+        self.tabs.addTab(self.schedule_tab, "Расписание")
+
+        self.schedule_gbox = QGroupBox("{}".format(self.day))
+
+        self.svbox = QVBoxLayout()
+        self.shbox1 = QHBoxLayout()
+        self.shbox2 = QHBoxLayout()
+
+        self.svbox.addLayout(self.shbox1)
+
+        self.shbox1.addWidget(self.schedule_gbox)
+
+        self._create_schedule_table()
+
+        self.svbox.addLayout(self.shbox2)
+        self.update_schedule_button = QPushButton("Обновить")
+        self.shbox2.addWidget(self.update_schedule_button)
+        self.update_schedule_button.clicked.connect(self._update_schedule)
+
+        self.shboxm = QHBoxLayout()
+        self.svbox.addLayout(self.shboxm)
+        self.monday_schedule_button = QPushButton("Понедельник")
+        self.shboxm.addWidget(self.monday_schedule_button)
+        self.monday_schedule_button.clicked.connect(lambda ch: self.btnstate('Понедельник'))
+
+        self.shboxt = QHBoxLayout()
+        self.shboxm.addLayout(self.shboxt)
+        self.tuesday_schedule_button = QPushButton("Вторник")
+        self.shboxt.addWidget(self.tuesday_schedule_button)
+        self.tuesday_schedule_button.clicked.connect(lambda ch: self.btnstate('Вторник'))
+
+        self.shboxw = QHBoxLayout()
+        self.shboxm.addLayout(self.shboxw)
+        self.wednesday_schedule_button = QPushButton("Среда")
+        self.shboxw.addWidget(self.wednesday_schedule_button)
+        self.wednesday_schedule_button.clicked.connect(lambda ch: self.btnstate('Среда'))
+
+        self.shboxth = QHBoxLayout()
+        self.shboxm.addLayout(self.shboxth)
+        self.thursday_schedule_button = QPushButton("Четверг")
+        self.shboxth.addWidget(self.thursday_schedule_button)
+        self.thursday_schedule_button.clicked.connect(lambda ch: self.btnstate('Четверг'))
+
+        self.shboxf = QHBoxLayout()
+        self.shboxm.addLayout(self.shboxf)
+        self.friday_schedule_button = QPushButton("Пятница")
+        self.shboxf.addWidget(self.friday_schedule_button)
+        self.friday_schedule_button.clicked.connect(lambda ch: self.btnstate('Пятница'))
+
+        self.shboxa = QHBoxLayout()
+        self.shbox1.addLayout(self.shboxa)
+        self.alter_lesson_button = QPushButton("Изменить")
+        self.shboxa.addWidget(self.alter_lesson_button)
+        self.alter_lesson_button.clicked.connect(lambda ch: self.update_lesson('Изменить'))
+
+        self.shboxd = QHBoxLayout()
+        self.shbox1.addLayout(self.shboxd)
+        self.delete_lesson_button = QPushButton("Удалить")
+        self.shboxd.addWidget(self.delete_lesson_button)
+        self.delete_lesson_button.clicked.connect(lambda ch: self.update_lesson('Удалить'))
+
+        self.shboxrow = QHBoxLayout()
+        self.shbox1.addLayout(self.shboxrow)
+        self.add_row_button = QPushButton("Добавить строку")
+        self.shboxrow.addWidget(self.add_row_button)
+        self.add_row_button.clicked.connect(lambda ch: self.update_lesson('Добавить строку'))
+
+        self.schedule_tab.setLayout(self.svbox)
+
+    def _create_schedule_table(self):
+        self.schedule_table = QTableWidget()
+        self.schedule_table.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
+
+        self.schedule_table.setColumnCount(4)
+        self.schedule_table.setHorizontalHeaderLabels(["Предмет", "Номер кабинета", "Время", ""])
+
+        self._update_schedule_table()
+
+        self.mvbox = QVBoxLayout()
+        self.mvbox.addWidget(self.schedule_table)
+        self.schedule_gbox.setLayout(self.mvbox)
+
+    def btnstate(self, wday):
+        self.day = wday
+
+    def _update_schedule_table(self):
+        self.cursor.execute(
+            "SELECT subject, room_numb, start_time, id FROM {} WHERE day = '{}'".format(this_week, self.day))
+        records = list(self.cursor.fetchall())
+
+        self.schedule_table.setRowCount(len(records) + 1)
+        self.schedule_gbox.setTitle(self.day)
+        for i, r in enumerate(records):
+            r = list(r)
+            selectRow = QPushButton("Выбрать")
+
+            self.schedule_table.setItem(i, 0, QTableWidgetItem(str(r[0])))
+            self.schedule_table.setItem(i, 1, QTableWidgetItem(str(r[1])))
+            self.schedule_table.setItem(i, 2, QTableWidgetItem(str(r[2])))
+
+            self.schedule_table.setItem(len(records), 0, QTableWidgetItem(str('')))
+            self.schedule_table.setItem(len(records), 1, QTableWidgetItem(str('')))
+            self.schedule_table.setItem(len(records), 2, QTableWidgetItem(str('')))
+
+            self.schedule_table.setCellWidget(i, 3, selectRow)
+            selectRow.clicked.connect(lambda ch, num=i, id=r[3]: self.select_row(num, id))
+
+        selectRow = QPushButton("Выбрать")
+        self.schedule_table.setCellWidget(len(records), 3, selectRow)
+        selectRow.clicked.connect(lambda ch, num=len(records): self.select_row(num))
+
+        self.schedule_table.resizeRowsToContents()
+
+    def select_row(self, numRow, *numId):
+        self.rowSelected = numRow
+        if numId:
+            self.idSelected = numId[0]
+            print(self.idSelected)
+        print(self.rowSelected)
+
+    def update_lesson(self, query):
+        if query == 'Изменить':
+            print('Изменить')
+            self.cursor.execute("select count(day) from {} where day = %s".format(this_week), (self.day,))
+            records = self.cursor.fetchall()
+            print(self.rowSelected)
+            try:
+                if records[0][0] == self.rowSelected:
+                    raise Exception
+                elif records[0][0] > self.rowSelected:
+                    new_values = []
+                    self.cursor.execute("SELECT column_name FROM information_schema.columns "
+                                        "WHERE table_schema = 'public' AND table_name = '{}' ".format(this_week))
+                    columns = self.cursor.fetchall()
+                    for temp in columns[2:]:
+                        text, ok = QInputDialog.getText(self, 'Alter in timetable', 'Enter {} value:'.format(temp[0]))
+                        if ok and text != "":
+                            new_values.append(text)
+                    if len(new_values) == 3:
+                        try:
+                            print(new_values)
+                            self.cursor.execute(
+                                "update {} set subject = %s, room_numb= %s, start_time = %s where id= {}".format(
+                                    this_week, self.idSelected), tuple(new_values))
+                            self.conn.commit()
+                        except:
+                            self.conn.commit()
+                            QMessageBox.about(self, "Ошибка", "Данного предмета нет в таблице ")
+
+            except:
+                self.conn.commit()
+                QMessageBox.about(self, "Ошибка", "Выберите пустую строку")
+
+        elif query == 'Удалить':
+            self.cursor.execute("select count(day) from {} where day = %s".format(this_week), (self.day,))
+            records = self.cursor.fetchall()
+            print(self.rowSelected)
+            try:
+                if records[0][0] == self.rowSelected:
+                    raise Exception
+                elif records[0][0] > self.rowSelected:
+                    self.cursor.execute("delete from {} where id={}".format(this_week, self.idSelected))
+                    self.conn.commit()
+            except:
+                self.conn.commit()
+                QMessageBox.about(self, "Ошибка", "Выберите пустую строку")
+
+        elif query == 'Добавить строку':
+            self.cursor.execute("select count(day) from {} where day = %s".format(this_week), (self.day,))
+            records = self.cursor.fetchall()
+            if records[0][0] == self.rowSelected:
+                print('Можно')
+                self.cursor.execute("SELECT column_name FROM information_schema.columns "
+                                    "WHERE table_schema = 'public' AND table_name = '{}' ".format(this_week))
+                columns = self.cursor.fetchall()
+                new_values = [self.day]
+                for temp in columns[2:]:
+                    text, ok = QInputDialog.getText(self, 'Добавить в расписание', 'Enter {} value:'.format(temp[0]))
+                    if ok and text != "":
+                        new_values.append(text)
+                if len(new_values) == 4:
+                    try:
+                        self.cursor.execute("insert into "
+                                            "{}(day, subject, room_numb, start_time) "
+                                            "values (%s, %s, %s, %s);".format(this_week), tuple(new_values))
+                        self.conn.commit()
+                    except:
+                        self.conn.commit()
+                        QMessageBox.about(self, "Ошибка", "Данный предмет отсутствует в таблице ")
+
+                print(new_values)
+
+            else:
+                QMessageBox.about(self, "Ошибка", "Выберите пустую строку")
+
+    def _update_schedule(self):
+        self.rowSelected = None
+        self.idSelected = None
+        self._update_schedule_table()
 
 
-@bot.message_handler(commands=['timetable'])
-def start_message(message):
-    keyboard = types.ReplyKeyboardMarkup()
-    keyboard.row("Понедельник", "Вторник", "Среда", "Четверг", "Пятница")
-    keyboard.row("Расписание на текущую неделю", "Расписание на следующую неделю")
-    keyboard.row("/start")
-    bot.send_message(message.chat.id, 'Информация о расписании', reply_markup=keyboard)
-
-
-@bot.message_handler(commands=['help'])
-def start_message(message):
-    bot.send_message(message.chat.id, 'Я - бот расписания\n'
-                                      'Я умею выводить расписание на определённый день недели или же на целую '
-                                      'интересующую вас неделю (команда /timetable)\n'
-                                      'Также я могу поделиться свежей информацией о МТУСИ (команда /mtuci)\n'
-                                      'И могу рассказать, верхняя или нижняя сейчас неделя (команда /week)')
-
-
-@bot.message_handler(commands=['mtuci'])
-def start_message(message):
-    bot.send_message(message.chat.id, 'Свежая информация о МТУСИ - https://mtuci.ru/')
-
-
-@bot.message_handler(commands=['week'])
-def start_message(message):
-    if this_week == 'timetable_upper':
-        bot.send_message(message.chat.id, 'Эта неделя верхняя.')
-    else:
-        bot.send_message(message.chat.id, 'Эта неделя нижняя.')
-
-
-def mess1(monday_upper):
-    a = []
-    cursor.execute(
-        "SELECT timetable_upper.subject, room_numb, start_time, full_name FROM timetable_upper INNER JOIN "
-        "subject ON timetable_upper.subject=subject.name INNER JOIN teacher ON subject.name=teacher.subject "
-        "WHERE day='Понедельник' ORDER BY start_time")
-    records = cursor.fetchall()
-    for row in records:
-        a += row
-    word = 'Понедельник \n------------ \n{}, {}, {}, {}\n{}, {}, {}, {}\n{}, {}, {}, {}\n------------' \
-        .format(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11])
-    bot.send_message(monday_upper.chat.id, word)
-
-
-def mess2(tuesday_upper):
-    a = []
-    cursor.execute(
-        "SELECT timetable_upper.subject, room_numb, start_time, full_name FROM timetable_upper INNER JOIN "
-        "subject ON timetable_upper.subject=subject.name INNER JOIN teacher ON subject.name=teacher.subject "
-        "WHERE day='Вторник' ORDER BY start_time")
-    records = cursor.fetchall()
-    for row in records:
-        a += row
-    word = 'Вторник \n------------ \n{}, {}, {}, {}\n{}, {}, {}, {}\n------------' \
-        .format(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7])
-    bot.send_message(tuesday_upper.chat.id, word)
-
-
-def mess3(wednesday_upper):
-    a = []
-    cursor.execute(
-        "SELECT timetable_upper.subject, room_numb, start_time, full_name FROM timetable_upper INNER JOIN "
-        "subject ON timetable_upper.subject=subject.name INNER JOIN teacher ON subject.name=teacher.subject "
-        "WHERE day='Среда' ORDER BY start_time")
-    records = cursor.fetchall()
-    for row in records:
-        a += row
-    word = 'Среда \n------------ \n{}, {}, {}, {}\n{}, {}, {}, {}\n{}, {}, {}, {}\n------------' \
-        .format(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11])
-    bot.send_message(wednesday_upper.chat.id, word)
-
-
-def mess4(thursday_upper):
-    a = []
-    cursor.execute(
-        "SELECT timetable_upper.subject, room_numb, start_time, full_name FROM timetable_upper INNER JOIN "
-        "subject ON timetable_upper.subject=subject.name INNER JOIN teacher ON subject.name=teacher.subject "
-        "WHERE day='Четверг' ORDER BY start_time")
-    records = cursor.fetchall()
-    for row in records:
-        a += row
-    word = 'Четверг \n------------ \n{}, {}, {}, {}\n{}, {}, {}, {}\n{}, {}, {}, {}\n------------' \
-        .format(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11])
-    bot.send_message(thursday_upper.chat.id, word)
-
-
-def mess5(friday_upper):
-    a = []
-    cursor.execute(
-        "SELECT timetable_upper.subject, room_numb, start_time, full_name FROM timetable_upper INNER JOIN "
-        "subject ON timetable_upper.subject=subject.name INNER JOIN teacher ON subject.name=teacher.subject "
-        "WHERE day='Пятница' ORDER BY start_time")
-    records = cursor.fetchall()
-    for row in records:
-        a += row
-    word = 'Пятница \n------------ \n{}, {}, {}, {}\n{}, {}, {}, {}\n{}, {}, {}, {}\n{}, {}, {}, {}\n------------' \
-        .format(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14],
-                a[15])
-    bot.send_message(friday_upper.chat.id, word)
-
-
-def mess6(monday_lower):
-    a = []
-    cursor.execute(
-        "SELECT timetable_lower.subject, room_numb, start_time, full_name FROM timetable_lower INNER JOIN "
-        "subject ON timetable_lower.subject=subject.name INNER JOIN teacher ON subject.name=teacher.subject "
-        "WHERE day='Понедельник' ORDER BY start_time")
-    records = cursor.fetchall()
-    for row in records:
-        a += row
-    word = 'Понедельник \n------------ \n{}, {}, {}, {}\n{}, {}, {}, {}\n{}, {}, {}, {}' \
-           '\n{}, {}, {}, {}\n{}, {}, {}, {}\n------------' \
-        .format(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11], a[12], a[13], a[14],
-                a[15], a[16], a[17], a[18], a[19])
-    bot.send_message(monday_lower.chat.id, word)
-
-
-def mess7(tuesday_lower):
-    a = []
-    cursor.execute(
-        "SELECT timetable_lower.subject, room_numb, start_time, full_name FROM timetable_lower INNER JOIN "
-        "subject ON timetable_lower.subject=subject.name INNER JOIN teacher ON subject.name=teacher.subject "
-        "WHERE day='Вторник' ORDER BY start_time")
-    records = cursor.fetchall()
-    for row in records:
-        a += row
-    word = 'Вторник \n------------ \n{}, {}, {}, {}\n{}, {}, {}, {}\n{}, {}, {}, {}\n------------' \
-        .format(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[8], a[9], a[10], a[11])
-    bot.send_message(tuesday_lower.chat.id, word)
-
-
-def mess8(wednesday_lower):
-    a = []
-    cursor.execute(
-        "SELECT timetable_lower.subject, room_numb, start_time, full_name FROM timetable_lower INNER JOIN "
-        "subject ON timetable_lower.subject=subject.name INNER JOIN teacher ON subject.name=teacher.subject "
-        "WHERE day='Среда' ORDER BY start_time")
-    records = cursor.fetchall()
-    for row in records:
-        a += row
-    word = 'Среда \n------------ \n{}, {}, {}, {}\n{}, {}, {}, {}\n------------' \
-        .format(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7])
-    bot.send_message(wednesday_lower.chat.id, word)
-
-
-def mess9(thursday_lower):
-    a = []
-    cursor.execute(
-        "SELECT timetable_lower.subject, room_numb, start_time, full_name FROM timetable_lower INNER JOIN "
-        "subject ON timetable_lower.subject=subject.name INNER JOIN teacher ON subject.name=teacher.subject "
-        "WHERE day='Четверг' ORDER BY start_time")
-    records = cursor.fetchall()
-    for row in records:
-        a += row
-    word = 'Четверг \n------------\n------------'
-    bot.send_message(thursday_lower.chat.id, word)
-
-
-def mess10(friday_lower):
-    a = []
-    cursor.execute(
-        "SELECT timetable_lower.subject, room_numb, start_time, full_name FROM timetable_lower INNER JOIN "
-        "subject ON timetable_lower.subject=subject.name INNER JOIN teacher ON subject.name=teacher.subject "
-        "WHERE day='Пятница' ORDER BY start_time")
-    records = cursor.fetchall()
-    for row in records:
-        a += row
-    word = 'Пятница \n------------ \n{}, {}, {}, {}\n{}, {}, {}, {}\n------------' \
-        .format(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7])
-    bot.send_message(friday_lower.chat.id, word)
-
-
-@bot.message_handler(content_types=['text'])
-def answer(message):
-    if (message.text.lower() == "расписание на текущую неделю" and this_week == 'timetable_upper') or (message.text.lower() == "расписание на слудующую неделю" and this_week == 'timetable_lower'):
-        mess1(message), mess2(message), mess3(message), mess4(message), mess5(message)
-    elif (message.text.lower() == "расписание на следующую неделю" and this_week == 'timetable_upper') or (message.text.lower() == "расписание на текущую неделю" and this_week == 'timetable_lower'):
-        mess6(message), mess7(message), mess8(message), mess9(message), mess10(message)
-    elif this_week == 'timetable_upper':
-        if message.text.lower() == "понедельник":
-            mess1(message)
-        elif message.text.lower() == "вторник":
-            mess2(message)
-        elif message.text.lower() == "среда":
-            mess3(message)
-        elif message.text.lower() == "четверг":
-            mess4(message)
-        elif message.text.lower() == "пятница":
-            mess5(message)
-        elif message.text.lower() != '':
-            bot.send_message(message.chat.id, 'Извините, я Вас не понял.')
-    elif this_week == 'timetable_lower':
-        if message.text.lower() == "понедельник":
-            mess6(message)
-        elif message.text.lower() == "вторник":
-            mess7(message)
-        elif message.text.lower() == "среда":
-            mess8(message)
-        elif message.text.lower() == "четверг":
-            mess9(message)
-        elif message.text.lower() == "пятница":
-            mess10(message)
-        elif message.text.lower() != '':
-            bot.send_message(message.chat.id, 'Извините, я Вас не понял.')
-
-
-bot.polling()
+app = QApplication(sys.argv)
+win = MainWindow()
+win.show()
+sys.exit(app.exec_())
